@@ -1,0 +1,368 @@
+// Prisma schema for The Creator Edit
+// Follows the PRD data model section
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  OWNER
+  ADMINISTRATOR
+  SUPPORT
+  ANALYST
+}
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+}
+
+enum SessionStatus {
+  DRAFT
+  SCHEDULED
+  LIVE
+  COMPLETED
+  CANCELLED
+}
+
+enum EventStatus {
+  DRAFT
+  PUBLISHED
+  COMPLETED
+  CANCELLED
+}
+
+enum OrderStatus {
+  PENDING
+  PAID
+  FAILED
+  REFUNDED
+  DISPUTED
+  REVERSED
+}
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  FAILED
+  REFUNDED
+}
+
+enum MembershipStatus {
+  PENDING
+  ACTIVE
+  EXPIRED
+  CANCELLED
+  SUSPENDED
+  REFUNDED
+}
+
+enum EntitlementStatus {
+  PENDING
+  ACTIVE
+  EXPIRED
+  CANCELLED
+  SUSPENDED
+  REFUNDED
+}
+
+enum AccessGrantStatus {
+  PENDING
+  ISSUED
+  REVOKED
+  EXPIRED
+}
+
+enum LinkType {
+  STREAMING
+  SOCIAL
+  TICKETING
+  WISHLIST
+  COMMUNITY
+}
+
+enum ContentType {
+  PAGE
+  FAQ
+  TERMS
+  PRIVACY
+  REFUND_POLICY
+}
+
+model User {
+  id        String   @id @default(uuid()) 
+  email     String   @unique 
+  password  String?   // hashed
+  role      Role     @default(SUPPORT)
+  status    UserStatus @default(ACTIVE)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  orders       Order[]
+  memberships  Membership[]
+  auditLogs    AuditLog[]
+  creator      Creator?
+  refreshToken RefreshToken?
+  consentRecords ConsentRecord[]
+
+  @@map("users")
+}
+
+model RefreshToken {
+  id        String   @id @default(uuid()) 
+  token     String   @unique 
+  userId    String   @unique 
+  expiresAt DateTime 
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("refresh_tokens")
+}
+
+model Creator {
+  id          String   @id @default(uuid()) 
+  slug        String   @unique 
+  displayName String   
+  bio         String   
+  imageUrl    String   
+  timezone    String   @default("UTC") 
+  currency    String   @default("USD") 
+  settings    Json     @default("{}") 
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  userId   String   @unique 
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  links        CreatorLink[]
+  sessions     Session[]
+  events       Event[]
+  wishlistLinks WishlistLink[]
+  pages        Page[]
+
+  @@map("creators")
+}
+
+model CreatorLink {
+  id        String   @id @default(uuid()) 
+  type      LinkType
+  url       String   
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  creatorId String   
+  creator   Creator  @relation(fields: [creatorId], references: [id], onDelete: Cascade)
+
+  @@map("creator_links")
+}
+
+model Session {
+  id          String        @id @default(uuid()) 
+  title       String        
+  description String        
+  startsAt    DateTime      
+  endsAt      DateTime      
+  timezone    String        
+  visibility  String        @default("public")  // public or member-only
+  streamingUrl String?      
+  status      SessionStatus @default(DRAFT)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  creatorId String 
+  creator   Creator @relation(fields: [creatorId], references: [id], onDelete: Cascade)
+
+  @@map("sessions")
+}
+
+model Event {
+  id          String      @id @default(uuid()) 
+  slug        String      @unique 
+  title       String      
+  description String      
+  startsAt    DateTime    
+  endsAt      DateTime    
+  timezone    String      
+  price       Int          // in minor units (cents/kobo)
+  currency    String      @default("USD") 
+  capacity    Int?        
+  status      EventStatus @default(DRAFT)
+  refundPolicy String?     
+  checkoutType String?      // "integrated" or "external"
+  checkoutUrl String?      // external checkout URL
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  creatorId String 
+  creator   Creator @relation(fields: [creatorId], references: [id], onDelete: Cascade)
+
+  orders   Order[]
+
+  @@map("events")
+}
+
+model Order {
+  id          String      @id @default(uuid()) 
+  orderRef    String      @unique 
+  amount      Int         
+  currency    String      
+  status      OrderStatus @default(PENDING)
+  buyerEmail  String      
+  buyerName   String?     
+  refundAmount Int?       
+  refundedAt  DateTime?   
+  refundedBy  String?     
+  refundReason String?    
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  userId    String?   
+  eventId   String?   
+  user      User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
+  event     Event?    @relation(fields: [eventId], references: [id], onDelete: SetNull)
+  payments  Payment[]
+  entitlements Entitlement[]
+
+  @@map("orders")
+}
+
+model Payment {
+  id                String   @id @default(uuid()) 
+  provider          String    // e.g. "paystack", "stripe"
+  providerReference String   
+  status            PaymentStatus @default(PENDING)
+  amount            Int      
+  currency          String   
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  orderId   String 
+  order     Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@map("payments")
+}
+
+model WebhookEvent {
+  id         String   @id @default(uuid()) 
+  provider   String   
+  eventId    String   @unique  // provider's webhook event ID
+  processedAt DateTime @default(now())
+
+  @@map("webhook_events")
+}
+
+model Membership {
+  id          String        @id @default(uuid()) 
+  planName    String        
+  price       Int           
+  currency    String        
+  durationDays Int          
+  status      MembershipStatus @default(PENDING)
+  expiresAt   DateTime?     
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  userId    String 
+  user      User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  entitlements Entitlement[]
+
+  @@map("memberships")
+}
+
+model Entitlement {
+  id          String         @id @default(uuid()) 
+  resourceType String         // e.g. "event", "membership", "community"
+  resourceId  String         
+  status      EntitlementStatus @default(PENDING)
+  expiresAt   DateTime?      
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  orderId    String?   
+  order      Order?   @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  membershipId String? 
+  membership Membership? @relation(fields: [membershipId], references: [id], onDelete: SetNull)
+  accessGrants AccessGrant[]
+
+  @@map("entitlements")
+}
+
+model AccessGrant {
+  id          String         @id @default(uuid()) 
+  provider    String         
+  status      AccessGrantStatus @default(PENDING)
+  token       String?        @unique 
+  expiresAt   DateTime?      
+  revokedAt   DateTime?      
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  entitlementId String 
+  entitlement Entitlement @relation(fields: [entitlementId], references: [id], onDelete: Cascade)
+
+  @@map("access_grants")
+}
+
+model WishlistLink {
+  id        String   @id @default(uuid()) 
+  provider  String   
+  url       String   
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  creatorId String 
+  creator   Creator @relation(fields: [creatorId], references: [id], onDelete: Cascade)
+
+  @@map("wishlist_links")
+}
+
+model Page {
+  id          String      @id @default(uuid()) 
+  slug        String      @unique 
+  title       String      
+  content     String       // HTML content
+  type        ContentType @default(PAGE)
+  isPublished Boolean     @default(true)
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  creatorId String 
+  creator   Creator @relation(fields: [creatorId], references: [id], onDelete: Cascade)
+
+  @@map("pages")
+}
+
+model AuditLog {
+  id        String   @id @default(uuid()) 
+  actorId   String   
+  action    String   
+  targetType String  
+  targetId  String   
+  createdAt DateTime @default(now())
+
+  actor User @relation(fields: [actorId], references: [id], onDelete: Cascade)
+
+  @@map("audit_logs")
+}
+
+model ConsentRecord {
+  id        String   @id @default(uuid()) 
+  userId    String   
+  purpose   String   
+  version   String   
+  grantedAt DateTime @default(now())
+  revokedAt DateTime? 
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("consent_records")
+}
